@@ -290,7 +290,18 @@ bot.on('callback_query', async (callbackQuery) => {
   if (action.startsWith('view_')) {
     const time = action.split('_')[1]; const dbData = await getDailySchedule(); const players = dbData.schedules[time];
     let responseText = `📅 *CHI TIẾT CA ĐẤU: ${time}* (${players.filter(p => p.trim() !== '').length}/12 Slot)\n\n`;
-    const inline_keyboard = [[{ text: '📝 Đăng Ký Liên Tục', callback_data: `flow_start_${time}` }, { text: '🗑️ Xóa Trống Ca', callback_data: `clear_ca_confirm_${time}` }]];
+    
+    // Thêm nút Xếp Cặp Ngẫu Nhiên cực kỳ tiện lợi
+    const inline_keyboard = [
+      [
+        { text: '📝 Đăng Ký Liên Tục', callback_data: `flow_start_${time}` },
+        { text: '🎲 Xếp Cặp Ngẫu Nhiên', callback_data: `random_pair_${time}` }
+      ],
+      [
+        { text: '🗑️ Xóa Trống Ca', callback_data: `clear_ca_confirm_${time}` }
+      ]
+    ];
+    
     players.forEach((player, index) => {
       const displayName = player.trim() ? player : '(Trống)'; responseText += `${numberIcons[index]} ${player.trim() ? `*${player}* 🏆` : displayName}\n`;
       if (index % 2 === 0) {
@@ -301,6 +312,53 @@ bot.on('callback_query', async (callbackQuery) => {
     });
     inline_keyboard.push([{ text: '🔙 Quay Lại Menu', callback_data: 'back_main' }]);
     bot.editMessageText(responseText, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard } });
+  }
+
+  // TÍNH NĂNG MỚI: TỰ ĐỘNG XẾP CẶP ĐỐI ĐẦU NGẪU NHIÊN CHO KHUNG GIỜ
+  if (action.startsWith('random_pair_')) {
+    const time = action.split('_')[2];
+    const dbData = await getDailySchedule();
+    const players = dbData.schedules[time].filter(p => p.trim() !== '');
+
+    if (players.length < 2) {
+      bot.sendMessage(chatId, `⚠️ Ca đấu ${time} hiện tại chỉ có ${players.length} người đăng ký. Cần tối thiểu 2 người để tiến hành xếp đối đầu ngẫu nhiên!`);
+      return;
+    }
+
+    // Xáo trộn mảng ngẫu nhiên (Fisher-Yates Shuffle)
+    const shuffled = [...players];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+
+    // Tạo nội dung thông báo đối đầu cực bốc
+    let pairText = `⚔️ ĐỐI ĐẦU NGẪU NHIÊN - CA ${time} ⚔️\n`;
+    pairText += `👑 ${config.brandName.toUpperCase()} 👑\n`;
+    pairText += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
+
+    let pairIndex = 1;
+    for (let i = 0; i < shuffled.length; i += 2) {
+      if (i + 1 < shuffled.length) {
+        pairText += `🔥 Cặp ${pairIndex}:  ${shuffled[i]}   🆚   ${shuffled[i+1]}\n`;
+        pairIndex++;
+      } else {
+        pairText += `✨ Slot lẻ chờ cặp:  ${shuffled[i]}\n`;
+      }
+    }
+    pairText += `\n━━━━━━━━━━━━━━━━━━━━━\n`;
+    pairText += `👉 Các kị thủ chuẩn bị máy sẵn sàng nhé!`;
+
+    await bot.sendMessage(chatId, `🎲 *Đã xếp cặp ngẫu nhiên thành công cho ca ${time}!* (Chạm vào khung dưới để copy):`);
+    await bot.sendMessage(chatId, `<pre><code>${pairText}</code></pre>`, {
+      parse_mode: 'HTML',
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: '🔙 Quay Lại Ca Đấu', callback_data: `view_${time}` }],
+          [{ text: '🔙 Quay Lại Menu Chính', callback_data: 'back_main' }]
+        ]
+      }
+    });
   }
 
   if (action.startsWith('flow_start_')) {
@@ -385,6 +443,7 @@ bot.on('callback_query', async (callbackQuery) => {
     bot.sendMessage(chatId, `🗑️ Đã xóa slot ${index + 1} ca ${time}!`); bot.deleteMessage(chatId, messageId);
   }
 
+  // Chỉnh sửa tên đơn lẻ
   if (action.startsWith('do_change_')) {
     const parts = action.split('_'); const time = parts[2]; const index = parseInt(parts[3]);
     bot.sendMessage(chatId, `✍️ Nhập TÊN MỚI thế chỗ Slot ${index + 1} ca ${time}:`); sessions[chatId] = { step: 'flow_waiting_name', time: time }; bot.deleteMessage(chatId, messageId);
