@@ -104,6 +104,28 @@ function detectTimeFrame(text) {
   return null;
 }
 
+// Bộ phân tích cú pháp dấu cộng (+) cực kỳ thông minh của Phát
+function parsePlusCommand(text) {
+  const cleaned = text.trim();
+  if (!cleaned.startsWith('+')) return null;
+  
+  // Bỏ dấu cộng và chữ số/khoảng trắng liền sau (ví dụ: +1 hoặc + 1 hoặc +)
+  let body = cleaned.substring(1).trim();
+  body = body.replace(/^\d+\s*/, '').trim(); // Bỏ số lượng ví dụ "+1 nguyen phat" -> "nguyen phat 8h"
+  
+  // Tìm khung giờ trong chuỗi
+  const time = detectTimeFrame(body);
+  if (!time) return null;
+  
+  // Tách lấy tên bằng cách lọc bỏ cụm từ chỉ giờ
+  const timeRegex = /(08h00|08h|8h\s*sang|8h|10h00|10h|13h00|13h|1h\s*chieu|1h|15h00|15h|3h\s*chieu|3h|19h00|19h|7h\s*toi|7h)/i;
+  const name = body.replace(timeRegex, '').trim();
+  
+  if (!name) return null;
+  
+  return { name, time };
+}
+
 // Tính toán giải thưởng cho từng ca dựa trên số người thực tế đăng ký
 function calculatePrizes(filledCount, config) {
   const totalRevenue = filledCount * config.entryFee;
@@ -326,7 +348,46 @@ bot.on('message', async (msg) => {
     }
   }
 
-  // TÍNH NĂNG XẾP CHỒNG TỰ ĐỘNG KHI DÁN TIN NHẮN
+  // TÍNH NĂNG ĐĂNG KÝ NHANH CÚ PHÁP DẤU CỘNG (+) (VÍ DỤ: +1 nguyen phat 8h hoặc +nguyen phat 13h)
+  const plusCmd = parsePlusCommand(text);
+  if (plusCmd) {
+    const { name, time } = plusCmd;
+    const statusMsg = await bot.sendMessage(chatId, `🔄 _Đang tự động xếp chồng "${name}" vào ca ${time}..._`, { parse_mode: 'Markdown' });
+
+    try {
+      const dbData = await getDailySchedule();
+      const currentPlayers = [...dbData.schedules[time]];
+      const nextEmptyIndex = currentPlayers.findIndex(player => player.trim() === '');
+
+      if (nextEmptyIndex !== -1) {
+        currentPlayers[nextEmptyIndex] = name;
+        dbData.schedules[time] = currentPlayers;
+        await updateDailySchedule(dbData);
+
+        // Tạo bảng tin nhắn đã cập nhật mới nhất
+        const updatedOutput = buildOutputText(dbData, config);
+
+        await bot.deleteMessage(chatId, statusMsg.message_id);
+        await bot.sendMessage(chatId, `✅ *Đã tự động xếp "${name}" vào Slot ${nextEmptyIndex + 1} ca ${time} thành công!*`, { parse_mode: 'Markdown' });
+        
+        // Gửi trả bảng đấu Copy nhanh bằng HTML Code Block
+        await bot.sendMessage(chatId, `<pre><code>${updatedOutput}</code></pre>`, {
+          parse_mode: 'HTML',
+          ...getMainMenuKeyboard(config)
+        });
+      } else {
+        await bot.deleteMessage(chatId, statusMsg.message_id);
+        await bot.sendMessage(chatId, `⚠️ Ca đấu ${time} đã đầy 12/12 slot! Không thể thêm tiếp.`, getMainMenuKeyboard(config));
+      }
+    } catch (err) {
+      console.error(err);
+      await bot.deleteMessage(chatId, statusMsg.message_id);
+      await bot.sendMessage(chatId, `❌ Lỗi Firestore: ${err.message}`);
+    }
+    return; // Dừng xử lý tiếp
+  }
+
+  // TÍNH NĂNG XẾP CHỒNG TỰ ĐỘNG KHI DÁN TIN NHẮN (DÁN HÀNG LOẠT)
   const lines = text.split('\n');
   const firstLine = lines[0].trim();
   const detectedTime = detectTimeFrame(firstLine);
@@ -389,7 +450,14 @@ bot.on('message', async (msg) => {
       bot.deleteMessage(chatId, statusMsg.message_id);
       bot.sendMessage(chatId, `❌ Lỗi kết nối Firestore: ${error.message}`);
     }
+    return; // Dừng xử lý tiếp
   }
+
+  // TỰ ĐỘNG GỬI MENU CHÍNH KHI PHÁT CHAT BẤT KỲ TIN NHẮN NÀO KHÔNG KHỚP CÚ PHÁP
+  bot.sendMessage(chatId, `ℹ️ *Cú pháp của Phát chưa khớp với đăng ký kaiser.* \n\nHệ thống tự động hiển thị Menu điều khiển để Phát dễ sử dụng:`, {
+    parse_mode: 'Markdown',
+    ...getMainMenuKeyboard(config)
+  });
 });
 
 // 5. XỬ LÝ SỰ KIỆN KHI NGƯỜI DÙNG CLICK NÚT BẤM (Callback)
