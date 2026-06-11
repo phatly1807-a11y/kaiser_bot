@@ -26,9 +26,9 @@ const DEFAULT_CONFIG = {
   bankName: 'BIDV',
   accountNumber: '8806532434',
   accountHolder: 'TRAN NGUYEN PHAT',
-  entryFee: 4,
-  profitPerSlot: 1,
-  tpFee: 3,
+  entryFee: 10,         // Chuyển mặc định sang phòng 10K cho Phát dễ dùng
+  profitPerSlot: 1,     // Phế Phát lấy 1K/Slot
+  tpFee: 3,             // TP mặc định 3K
   autoAdjustPrize: true,
   ctvList: []
 };
@@ -60,14 +60,14 @@ async function getDailySchedule() {
   const docRef = db.collection('kaiser_schedules').doc(todayStr);
   const doc = await docRef.get();
   if (!doc.exists) {
-    const initialData = { createdAt: admin.firestore.FieldValue.serverTimestamp(), schedules: {} };
+    const initialData = { 
+      createdAt: admin.firestore.FieldValue.serverTimestamp(), 
+      schedules: {},
+      penaltyList: [] // Khởi tạo danh sách phạt rỗng hoàn toàn, không có tên rác
+    };
     timeFrames.forEach(time => { initialData.schedules[time] = Array(12).fill(''); });
-    initialData.penaltyList = [
-      { name: 'Binn Minh', count: 8 }, { name: 'Văn Huy', count: 4 }, { name: 'Trần Đại an', count: 28 },
-      { name: 'Huy Hoàng', count: 2 }, { name: 'Kỳ Nguyễn', count: 4 }, { name: 'Ku Tin', count: 11 },
-      { name: 'Minh Khôi', count: 4 }, { name: 'Minh Quốc', count: 2 }, { name: 'Minh Đạt', count: 1 }, { name: 'Trần Cường', count: 3 }
-    ];
-    await docRef.set(initialData); return initialData;
+    await docRef.set(initialData); 
+    return initialData;
   }
   return doc.data();
 }
@@ -130,9 +130,17 @@ function buildOutputText(dbData, config) {
     players.forEach((player, idx) => { const displayName = player.trim(); text += `${numberIcons[idx]}${displayName ? displayName + '🏆' : ''}\n`; });
     text += `\n`;
   });
-  text += `✅ HUỶ TRƯỚC 2H + PHÍ TRƯỚC 2H\n`;
-  dbData.penaltyList.forEach(item => { text += `${item.name} ${item.count}\n`; });
-  text += `\n━━━━━━━━━━━\n💳 THÔNG TIN CHUYỂN KHOẢN:\n👉 Ngân hàng: ${config.bankName}\n👉 Số tài khoản: ${config.accountNumber}\n👉 Chủ tài khoản: ${config.accountHolder}\n👉 Nội dung CK: Tên_Nick + Ca_Đấu\n⚠️ Vui lòng đóng phí trước giờ đấu 2 tiếng để giữ slot!`;
+
+  const penaltyList = dbData.penaltyList || [];
+  if (penaltyList.length > 0) {
+    text += `✅ HUỶ TRƯỚC 2H + PHÍ TRƯỚC 2H\n`;
+    penaltyList.forEach(item => {
+      text += `${item.name} ${item.count}\n`;
+    });
+    text += `\n`;
+  }
+
+  text += `━━━━━━━━━━━\n💳 THÔNG TIN CHUYỂN KHOẢN:\n👉 Ngân hàng: ${config.bankName}\n👉 Số tài khoản: ${config.accountNumber}\n👉 Chủ tài khoản: ${config.accountHolder}\n👉 Nội dung CK: Tên_Nick + Ca_Đấu\n⚠️ Vui lòng đóng phí trước giờ đấu 2 tiếng để giữ slot!`;
   return text;
 }
 
@@ -160,61 +168,50 @@ bot.on('message', async (msg) => {
 
   if (!text) return;
 
-  // Kiểm tra phân quyền Admin/CTV
   const isUserAuthorized = await isAuthorized(userId);
-  if (!isUserAuthorized) return; // Người lạ chat tự do trong nhóm, bot im lặng hoàn toàn
+  if (!isUserAuthorized) return; 
 
   const config = await getSystemConfig();
 
-  // LỘC CÚ PHÁP LỆNH NHANH ĐỂ VƯỢT QUA PRIVACY MODE CỦA TELEGRAM
-  if (text.startsWith('/lephi ') || text.startsWith('/fee ')) {
-    const fee = parseInt(text.substring(text.indexOf(' ') + 1).trim());
-    if (isNaN(fee) || fee <= 0) {
-      bot.sendMessage(chatId, `❌ Lệ phí không hợp lệ! Vui lòng nhập số nguyên.`);
-      return;
-    }
-    config.entryFee = fee;
-    await updateSystemConfig(config);
-    bot.sendMessage(chatId, `✅ Đã sửa lệ phí phòng đấu thành *${fee}K*!`, { parse_mode: 'Markdown' });
-    return;
-  }
-
-  if (text.startsWith('/loi ') || text.startsWith('/phe ')) {
-    const profit = parseInt(text.substring(text.indexOf(' ') + 1).trim());
-    if (isNaN(profit) || profit < 0) {
-      bot.sendMessage(chatId, `❌ Mức tiền lời không hợp lệ!`);
-      return;
-    }
-    config.profitPerSlot = profit;
-    await updateSystemConfig(config);
-    bot.sendMessage(chatId, `✅ Đã sửa tiền phế Phát thu mỗi slot thành *${profit}K*!`, { parse_mode: 'Markdown' });
-    return;
-  }
-
-  if (text.startsWith('/tp ')) {
-    const tp = parseInt(text.substring(text.indexOf(' ') + 1).trim());
-    if (isNaN(tp) || tp < 0) {
-      bot.sendMessage(chatId, `❌ Phí TP không hợp lệ!`);
-      return;
-    }
-    config.tpFee = tp;
-    await updateSystemConfig(config);
-    bot.sendMessage(chatId, `✅ Đã sửa phí thế chân TP thành *${tp}K*!`, { parse_mode: 'Markdown' });
-    return;
-  }
-
-  // Lệnh gọi Menu chính trong nhóm chat
-  if (text.startsWith('/start') || text.startsWith('/menu')) {
-    delete sessions[chatId];
-    bot.sendMessage(chatId, `⚡ *BẢNG GIẢI KAISER - PHÁT CÀY THUÊ* ⚡\nHệ thống xếp lịch tự động đã sẵn sàng hoạt động tại Box này!`, {
-      parse_mode: 'Markdown', ...getMainMenuKeyboard(config)
-    });
-    return;
-  }
-
-  // Xử lý các session nhập liệu từng bước dựa theo ChatId của nhóm
+  // XỬ LÝ NHẬP LIỆU THEO TỪNG BƯỚC
   if (sessions[chatId]) {
     const session = sessions[chatId];
+    const value = parseInt(text.trim());
+
+    if (!isNaN(value) && value >= 0) {
+      if (session.step === 'setup_waiting_entry') {
+        config.entryFee = value;
+        await updateSystemConfig(config);
+        delete sessions[chatId];
+        bot.sendMessage(chatId, `✅ Đã sửa lệ phí thành công thành *${value}K*!`, {
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: [[{ text: '⚙️ Setup', callback_data: 'setup_menu' }]] }
+        });
+        return;
+      }
+
+      if (session.step === 'setup_waiting_profit') {
+        config.profitPerSlot = value;
+        await updateSystemConfig(config);
+        delete sessions[chatId];
+        bot.sendMessage(chatId, `✅ Đã sửa tiền lời thành công thành *${value}K*!`, {
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: [[{ text: '⚙️ Setup', callback_data: 'setup_menu' }]] }
+        });
+        return;
+      }
+
+      if (session.step === 'setup_waiting_tp') {
+        config.tpFee = value;
+        await updateSystemConfig(config);
+        delete sessions[chatId];
+        bot.sendMessage(chatId, `✅ Đã sửa phí TP thành công thành *${value}K*!`, {
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: [[{ text: '⚙️ Setup', callback_data: 'setup_menu' }]] }
+        });
+        return;
+      }
+    }
 
     if (session.step === 'flow_waiting_name') {
       const nameToAdd = text.trim(); const time = session.time;
@@ -240,24 +237,6 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    if (session.step === 'setup_waiting_entry') {
-      const fee = parseInt(text); if (isNaN(fee) || fee <= 0) { bot.sendMessage(chatId, `❌ Số không hợp lệ, nhập lại:`); return; }
-      config.entryFee = fee; await updateSystemConfig(config); delete sessions[chatId];
-      bot.sendMessage(chatId, `✅ Đã sửa lệ phí thành *${fee}K*!`, { reply_markup: { inline_keyboard: [[{ text: '⚙️ Setup', callback_data: 'setup_menu' }]] } }); return;
-    }
-
-    if (session.step === 'setup_waiting_profit') {
-      const profit = parseInt(text); if (isNaN(profit) || profit < 0) { bot.sendMessage(chatId, `❌ Số không hợp lệ, nhập lại:`); return; }
-      config.profitPerSlot = profit; await updateSystemConfig(config); delete sessions[chatId];
-      bot.sendMessage(chatId, `✅ Đã sửa tiền lời thành *${profit}K*!`, { reply_markup: { inline_keyboard: [[{ text: '⚙️ Setup', callback_data: 'setup_menu' }]] } }); return;
-    }
-
-    if (session.step === 'setup_waiting_tp') {
-      const tp = parseInt(text); if (isNaN(tp) || tp < 0) { bot.sendMessage(chatId, `❌ Số không hợp lệ, nhập lại:`); return; }
-      config.tpFee = tp; await updateSystemConfig(config); delete sessions[chatId];
-      bot.sendMessage(chatId, `✅ Đã sửa phí TP thành *${tp}K*!`, { reply_markup: { inline_keyboard: [[{ text: '⚙️ Setup', callback_data: 'setup_menu' }]] } }); return;
-    }
-
     if (session.step === 'setup_waiting_ctv_id') {
       const ctvId = text.trim(); if (!/^\d+$/.test(ctvId)) { bot.sendMessage(chatId, `❌ ID sai định dạng số!`); return; }
       if (!config.ctvList) config.ctvList = [];
@@ -269,7 +248,16 @@ bot.on('message', async (msg) => {
     }
   }
 
-  // Cú pháp dấu cộng đăng ký nhanh (+nguyen phat 8h)
+  // Lệnh khởi động
+  if (text.startsWith('/start') || text.startsWith('/menu')) {
+    delete sessions[chatId];
+    bot.sendMessage(chatId, `⚡ *BẢNG GIẢI KAISER - PHÁT CÀY THUÊ* ⚡\nHệ thống xếp lịch tự động đã sẵn sàng hoạt động tại Box này!`, {
+      parse_mode: 'Markdown', ...getMainMenuKeyboard(config)
+    });
+    return;
+  }
+
+  // Đăng ký nhanh dấu cộng (+)
   const plusCmd = parsePlusCommand(text);
   if (plusCmd) {
     const { name, time } = plusCmd;
@@ -312,11 +300,10 @@ bot.on('message', async (msg) => {
 bot.on('callback_query', async (callbackQuery) => {
   const action = callbackQuery.data; const msg = callbackQuery.message;
   const chatId = msg.chat.id; const messageId = msg.message_id;
-  const userId = callbackQuery.from.id; // Lấy chính xác ID người nhấn nút
+  const userId = callbackQuery.from.id; 
 
   bot.answerCallbackQuery(callbackQuery.id);
 
-  // Phân quyền nhấn nút
   const isUserAuthorized = await isAuthorized(userId);
   if (!isUserAuthorized) {
     bot.sendMessage(chatId, `🚫 Bạn không có quyền bấm nút điều khiển trên bot này!`); return;
@@ -328,7 +315,7 @@ bot.on('callback_query', async (callbackQuery) => {
     const time = action.split('_')[1]; const dbData = await getDailySchedule(); const players = dbData.schedules[time];
     let responseText = `📅 *CHI TIẾT CA ĐẤU: ${time}* (${players.filter(p => p.trim() !== '').length}/12 Slot)\n\n`;
     
-    // Thêm nút Xếp Cặp Ngẫu Nhiên cực kỳ tiện lợi
+    // Tích hợp nút Xếp Cặp Ngẫu Nhiên
     const inline_keyboard = [
       [
         { text: '📝 Đăng Ký Liên Tục', callback_data: `flow_start_${time}` },
@@ -351,40 +338,57 @@ bot.on('callback_query', async (callbackQuery) => {
     bot.editMessageText(responseText, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard } });
   }
 
-  // TÍNH NĂNG MỚI: TỰ ĐỘNG XẾP CẶP ĐỐI ĐẦU NGẪU NHIÊN CHO KHUNG GIỜ
+  // TÍNH NĂNG MỚI: TỰ ĐỘNG NHẬN DIỆN SỐ LƯỢNG TEAM (12, 6 HOẶC 3) ĐỂ CHIA ĐỐI ĐẦU NGẪU NHIÊN 
   if (action.startsWith('random_pair_')) {
     const time = action.split('_')[2];
     const dbData = await getDailySchedule();
     const players = dbData.schedules[time].filter(p => p.trim() !== '');
 
     if (players.length < 2) {
-      bot.sendMessage(chatId, `⚠️ Ca đấu ${time} hiện tại chỉ có ${players.length} người đăng ký. Cần tối thiểu 2 người để tiến hành xếp đối đầu ngẫu nhiên!`);
+      bot.sendMessage(chatId, `⚠️ Ca đấu ${time} hiện tại chỉ có ${players.length} người. Cần tối thiểu 2 người để xếp đối đầu!`);
       return;
     }
 
+    // Xáo trộn ngẫu nhiên (Fisher-Yates)
     const shuffled = [...players];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
 
+    // Xác định tên vòng đấu tự động dựa trên số lượng team thực tế có trong danh sách
+    let roundName = 'VÒNG ĐỐI ĐẦU QUYẾT ĐẤU';
+    if (shuffled.length === 12) roundName = 'VÒNG 12 ĐỘI (6 CẶP ĐỐI ĐẦU)';
+    else if (shuffled.length === 6) roundName = 'VÒNG 6 ĐỘI (3 CẶP ĐỐI ĐẦU)';
+    else if (shuffled.length === 3) roundName = 'VÒNG CHUNG KẾT (3 ĐỘI TRANH CÚP)';
+
     let pairText = `⚔️ ĐỐI ĐẦU NGẪU NHIÊN - CA ${time} ⚔️\n`;
     pairText += `👑 ${config.brandName.toUpperCase()} 👑\n`;
+    pairText += `🏆 GIAI ĐOẠN: ${roundName}\n`;
     pairText += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
-    let pairIndex = 1;
-    for (let i = 0; i < shuffled.length; i += 2) {
-      if (i + 1 < shuffled.length) {
-        pairText += `🔥 Cặp ${pairIndex}:  ${shuffled[i]}   🆚   ${shuffled[i+1]}\n`;
-        pairIndex++;
-      } else {
-        pairText += `✨ Slot lẻ chờ cặp:  ${shuffled[i]}\n`;
+    if (shuffled.length === 3) {
+      // Thiết kế riêng cho Vòng 3 Đội tranh giải (1 cặp đấu loại, 1 team đặc cách vào chung kết)
+      pairText += `🔥 Trận Đối Đầu Loại Trực Tiếp:\n`;
+      pairText += `👉 ${shuffled[0]}   🆚   ${shuffled[1]}\n\n`;
+      pairText += `🎁 Đội Được Vé Đặc Cách (Bye):\n`;
+      pairText += `👉 ${shuffled[2]} ⭐ (Vào thẳng Trận Chung Kết)\n`;
+    } else {
+      // Chia cặp đối đầu chẵn thông thường (hoặc có lẻ slot nếu lẻ người)
+      let pairIndex = 1;
+      for (let i = 0; i < shuffled.length; i += 2) {
+        if (i + 1 < shuffled.length) {
+          pairText += `🔥 Cặp ${pairIndex}:  ${shuffled[i]}   🆚   ${shuffled[i+1]}\n`;
+          pairIndex++;
+        } else {
+          pairText += `✨ Vé Đặc Cách Chờ Đối Thủ:  ${shuffled[i]} ⭐\n`;
+        }
       }
     }
     pairText += `\n━━━━━━━━━━━━━━━━━━━━━\n`;
     pairText += `👉 Các kị thủ chuẩn bị máy sẵn sàng nhé!`;
 
-    await bot.sendMessage(chatId, `🎲 *Đã xếp cặp ngẫu nhiên thành công cho ca ${time}!* (Chạm vào khung dưới để copy):`);
+    await bot.sendMessage(chatId, `🎲 *Đã xếp cặp ngẫu nhiên thành công cho ca ${time}!* (Chạm vào khung dưới để copy nhanh):`);
     await bot.sendMessage(chatId, `<pre><code>${pairText}</code></pre>`, {
       parse_mode: 'HTML',
       reply_markup: {
