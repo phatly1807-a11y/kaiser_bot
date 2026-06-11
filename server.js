@@ -19,6 +19,9 @@ const db = admin.firestore();
 const token = process.env.TELEGRAM_BOT_TOKEN;
 const bot = new TelegramBot(token, { polling: true });
 
+// ID Telegram của bạn (Phát) - Người có toàn quyền quản trị cao nhất
+const OWNER_ID = 8635662032;
+
 // Trạng thái phiên làm việc (Session) của từng người dùng để nhập liệu liên tục
 const sessions = {};
 
@@ -32,7 +35,8 @@ const DEFAULT_CONFIG = {
   entryFee: 4,          // Mặc định phòng 4K
   profitPerSlot: 1,     // Lời 1K/Slot
   tpFee: 3,             // TP 3K
-  autoAdjustPrize: true // Tự động giảm giải khi thiếu người
+  autoAdjustPrize: true, // Tự động giảm giải khi thiếu người
+  ctvList: []           // Danh sách chứa ID Telegram của các CTV được phép dùng bot
 };
 
 const numberIcons = ['0️⃣1️⃣', '0️⃣2️⃣', '0️⃣3️⃣', '0️⃣4️⃣', '0️⃣5️⃣', '0️⃣6️⃣', '0️⃣7️⃣', '0️⃣8️⃣', '0️⃣9️⃣', '1️⃣0️⃣', '1️⃣1️⃣', '1️⃣2️⃣'];
@@ -53,6 +57,15 @@ async function getSystemConfig() {
 async function updateSystemConfig(newConfig) {
   const docRef = db.collection('kaiser_config').doc('default');
   await docRef.set(newConfig, { merge: true });
+}
+
+// Hàm kiểm tra quyền sử dụng Bot (Chỉ cho phép Phát và các CTV đã đăng ký)
+async function isAuthorized(chatId) {
+  if (chatId === OWNER_ID) return true;
+  const config = await getSystemConfig();
+  const ctvList = config.ctvList || [];
+  // So khớp cả kiểu số và kiểu chữ để tránh lỗi ép kiểu dữ liệu
+  return ctvList.includes(chatId) || ctvList.includes(String(chatId));
 }
 
 // Lấy dữ liệu lịch hôm nay từ Firestore
@@ -237,6 +250,13 @@ bot.on('message', async (msg) => {
 
   if (!text) return;
 
+  // HỆ THỐNG KIỂM TRA PHÂN QUYỀN (CHỈ PHÁT & CTV MỚI ĐƯỢC CHAT VỚI BOT)
+  const isUserAuthorized = await isAuthorized(chatId);
+  if (!isUserAuthorized) {
+    bot.sendMessage(chatId, `🚫 *CẢNH BÁO BẢO MẬT:* Bạn không có quyền truy cập hệ thống của *Phát Cày Thuê*. Vui lòng liên hệ Admin để được cấp quyền sử dụng bot!`, { parse_mode: 'Markdown' });
+    return;
+  }
+
   const config = await getSystemConfig();
 
   // Khởi chạy hệ thống điều khiển
@@ -344,6 +364,32 @@ bot.on('message', async (msg) => {
       bot.sendMessage(chatId, `✅ Đã cập nhật phí thế chân TP thành *${tp}K*!`, {
         reply_markup: { inline_keyboard: [[{ text: '⚙️ Quay Lại Setup', callback_data: 'setup_menu' }]] }
       });
+      return;
+    }
+
+    // Thiết lập cấu hình: Nhập Telegram ID CTV mới muốn thêm (Chỉ có Phát mới truy cập được step này)
+    if (session.step === 'setup_waiting_ctv_id') {
+      const ctvId = text.trim();
+      if (!/^\d+$/.test(ctvId)) {
+        bot.sendMessage(chatId, `❌ ID không hợp lệ! ID Telegram bắt buộc chỉ chứa ký tự số (Ví dụ: 8635662032). Vui lòng nhập lại:`);
+        return;
+      }
+
+      if (!config.ctvList) config.ctvList = [];
+
+      if (!config.ctvList.includes(ctvId) && !config.ctvList.includes(Number(ctvId))) {
+        config.ctvList.push(ctvId);
+        await updateSystemConfig(config);
+        bot.sendMessage(chatId, `✅ Đã thêm CTV mới có ID *${ctvId}* thành công!`, {
+          parse_mode: 'Markdown',
+          reply_markup: { inline_keyboard: [[{ text: '👥 Quay Lại Quản Lý CTV', callback_data: 'setup_ctv' }]] }
+        });
+      } else {
+        bot.sendMessage(chatId, `⚠️ ID CTV này đã được đăng ký quyền sử dụng từ trước rồi!`, {
+          reply_markup: { inline_keyboard: [[{ text: '👥 Quay Lại Quản Lý CTV', callback_data: 'setup_ctv' }]] }
+        });
+      }
+      delete sessions[chatId];
       return;
     }
   }
@@ -469,6 +515,13 @@ bot.on('callback_query', async (callbackQuery) => {
 
   bot.answerCallbackQuery(callbackQuery.id);
 
+  // KIỂM TRA PHÂN QUYỀN NÚT BẤM CALLBACK (CHỈ PHÁT & CTV MỚI ĐƯỢC NHẤN NÚT TRÊN BOT)
+  const isUserAuthorized = await isAuthorized(chatId);
+  if (!isUserAuthorized) {
+    bot.sendMessage(chatId, `🚫 Bạn không có quyền thực hiện hành động này!`);
+    return;
+  }
+
   const config = await getSystemConfig();
 
   // Xem chi tiết ca đấu
@@ -565,15 +618,125 @@ bot.on('callback_query', async (callbackQuery) => {
       [
         { text: '✏️ Sửa Phí TP', callback_data: 'setup_edit_tp' },
         { text: `🔄 Auto Giảm Giải: ${config.autoAdjustPrize ? 'Tắt' : 'Bật'}`, callback_data: 'toggle_auto_prize' }
-      ],
-      [
-        { text: '🔙 Quay Lại Menu Chính', callback_data: 'back_main' }
       ]
+    ];
+
+    // Chỉ có ADMIN tối cao (Phát) mới được nhìn thấy và sử dụng nút bấm Quản lý CTV
+    if (chatId === OWNER_ID) {
+      inline_keyboard.push([{ text: '👥 Quản Lý CTV (Admin)', callback_data: 'setup_ctv' }]);
+    }
+
+    inline_keyboard.push([{ text: '🔙 Quay Lại Menu Chính', callback_data: 'back_main' }]);
+
+    bot.editMessageText(text, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard }
+    });
+  }
+
+  // TÍNH NĂNG MỚI: QUẢN LÝ CỘNG TÁC VIÊN (Chỉ cho phép OWNER_ID tức Phát)
+  if (action === 'setup_ctv') {
+    if (chatId !== OWNER_ID) {
+      bot.sendMessage(chatId, `🚫 Bạn không có quyền truy cập khu vực quản trị CTV!`);
+      return;
+    }
+
+    const ctvList = config.ctvList || [];
+    let text = `👥 *DANH SÁCH CỘNG TÁC VIÊN (CTV) ĐƯỢC PHÂN QUYỀN:*\n\n`;
+    
+    if (ctvList.length === 0) {
+      text += `_Chưa có cộng tác viên nào được thêm. Chỉ duy nhất bạn (Phát) có quyền sử dụng Bot._`;
+    } else {
+      ctvList.forEach((id, index) => {
+        text += `${index + 1}. Telegram ID: \`${id}\`\n`;
+      });
+    }
+
+    text += `\nChọn hành động quản trị phía dưới:`;
+
+    const inline_keyboard = [
+      [
+        { text: '➕ Thêm CTV Mới', callback_data: 'ctv_add_prompt' },
+        { text: '➖ Xóa Quyền CTV', callback_data: 'ctv_remove_list' }
+      ],
+      [{ text: '⚙️ Quay Lại Setup', callback_data: 'setup_menu' }]
     ];
 
     bot.editMessageText(text, {
       chat_id: chatId,
       message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard }
+    });
+  }
+
+  // Yêu cầu Phát nhập ID CTV mới
+  if (action === 'ctv_add_prompt') {
+    if (chatId !== OWNER_ID) return;
+    sessions[chatId] = { step: 'setup_waiting_ctv_id' };
+    bot.sendMessage(chatId, `✍️ Vui lòng dán/gửi *ID Telegram* của CTV bạn muốn phân quyền (Lấy từ @userinfobot hoặc @IdBot giống trong ảnh):`);
+  }
+
+  // Hiển thị danh sách CTV để bấm xóa quyền trực tiếp
+  if (action === 'ctv_remove_list') {
+    if (chatId !== OWNER_ID) return;
+
+    const ctvList = config.ctvList || [];
+    if (ctvList.length === 0) {
+      bot.sendMessage(chatId, `⚠️ Danh sách CTV trống, không có ai để xóa!`);
+      return;
+    }
+
+    let text = `🗑️ *CHỌN CTV BẠN MUỐN THU HỒI QUYỀN SỬ DỤNG BOT:*`;
+    const inline_keyboard = [];
+
+    ctvList.forEach((id) => {
+      inline_keyboard.push([{ text: `❌ Thu hồi ID: ${id}`, callback_data: `ctv_do_remove_${id}` }]);
+    });
+
+    inline_keyboard.push([{ text: '🔙 Quay Lại Quản Lý CTV', callback_data: 'setup_ctv' }]);
+
+    bot.editMessageText(text, {
+      chat_id: chatId,
+      message_id: messageId,
+      parse_mode: 'Markdown',
+      reply_markup: { inline_keyboard }
+    });
+  }
+
+  // Thực thi xóa CTV khỏi Firestore
+  if (action.startsWith('ctv_do_remove_')) {
+    if (chatId !== OWNER_ID) return;
+    const targetId = action.replace('ctv_do_remove_', '');
+
+    config.ctvList = (config.ctvList || []).filter(id => String(id) !== String(targetId));
+    await updateSystemConfig(config);
+
+    bot.sendMessage(chatId, `✅ Đã thu hồi quyền CTV thành công đối với ID *${targetId}*!`, { parse_mode: 'Markdown' });
+    
+    // Refresh lại menu quản lý CTV
+    const ctvList = config.ctvList;
+    let text = `👥 *DANH SÁCH CỘNG TÁC VIÊN (CTV) ĐƯỢC PHÂN QUYỀN:*\n\n`;
+    if (ctvList.length === 0) {
+      text += `_Chưa có cộng tác viên nào được thêm._`;
+    } else {
+      ctvList.forEach((id, index) => {
+        text += `${index + 1}. Telegram ID: \`${id}\`\n`;
+      });
+    }
+    text += `\nChọn hành động quản trị phía dưới:`;
+
+    const inline_keyboard = [
+      [
+        { text: '➕ Thêm CTV Mới', callback_data: 'ctv_add_prompt' },
+        { text: '➖ Xóa Quyền CTV', callback_data: 'ctv_remove_list' }
+      ],
+      [{ text: '⚙️ Quay Lại Setup', callback_data: 'setup_menu' }]
+    ];
+
+    bot.sendMessage(chatId, text, {
       parse_mode: 'Markdown',
       reply_markup: { inline_keyboard }
     });
