@@ -55,21 +55,32 @@ async function isAuthorized(userId) {
   return ctvList.includes(userId) || ctvList.includes(String(userId)) || ctvList.includes(Number(userId));
 }
 
+// Lấy dữ liệu lịch và tự động kiểm tra dọn rác mẫu cũ trên Firestore
 async function getDailySchedule() {
   const todayStr = new Date().toISOString().split('T')[0];
   const docRef = db.collection('kaiser_schedules').doc(todayStr);
   const doc = await docRef.get();
+  
   if (!doc.exists) {
     const initialData = { 
       createdAt: admin.firestore.FieldValue.serverTimestamp(), 
       schedules: {},
-      penaltyList: [] // Khởi tạo danh sách phạt rỗng hoàn toàn, không có tên rác
+      penaltyList: [] // Khởi tạo hoàn toàn trống
     };
     timeFrames.forEach(time => { initialData.schedules[time] = Array(12).fill(''); });
     await docRef.set(initialData); 
     return initialData;
   }
-  return doc.data();
+
+  const data = doc.data();
+  
+  // TỰ ĐỘNG KHẮC PHỤC: Nếu Firestore đang chứa dữ liệu rác cũ (có Binn Minh), dọn sạch ngay lập tức
+  if (data.penaltyList && data.penaltyList.some(item => item.name === 'Binn Minh')) {
+    data.penaltyList = [];
+    await docRef.update({ penaltyList: [] });
+  }
+  
+  return data;
 }
 
 async function updateDailySchedule(data) {
@@ -322,7 +333,7 @@ bot.on('callback_query', async (callbackQuery) => {
         { text: '🎲 Xếp Cặp Ngẫu Nhiên', callback_data: `random_pair_${time}` }
       ],
       [
-        { text: '🗑️ Xóa Trống Ca', callback_data: `clear_ca_confirm_${time}` }
+        { text: '🗑️ Xóa Trống Cả Ca', callback_data: `clear_ca_confirm_${time}` }
       ]
     ];
     
@@ -338,7 +349,7 @@ bot.on('callback_query', async (callbackQuery) => {
     bot.editMessageText(responseText, { chat_id: chatId, message_id: messageId, parse_mode: 'Markdown', reply_markup: { inline_keyboard } });
   }
 
-  // TÍNH NĂNG MỚI: TỰ ĐỘNG NHẬN DIỆN SỐ LƯỢNG TEAM (12, 6 HOẶC 3) ĐỂ CHIA ĐỐI ĐẦU NGẪU NHIÊN 
+  // TÍNH NĂNG TỰ ĐỘNG NHẬN DIỆN SỐ LƯỢNG TEAM (12, 6 HOẶC 3) ĐỂ CHIA ĐỐI ĐẦU NGẪU NHIÊN 
   if (action.startsWith('random_pair_')) {
     const time = action.split('_')[2];
     const dbData = await getDailySchedule();
@@ -349,14 +360,12 @@ bot.on('callback_query', async (callbackQuery) => {
       return;
     }
 
-    // Xáo trộn ngẫu nhiên (Fisher-Yates)
     const shuffled = [...players];
     for (let i = shuffled.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
     }
 
-    // Xác định tên vòng đấu tự động dựa trên số lượng team thực tế có trong danh sách
     let roundName = 'VÒNG ĐỐI ĐẦU QUYẾT ĐẤU';
     if (shuffled.length === 12) roundName = 'VÒNG 12 ĐỘI (6 CẶP ĐỐI ĐẦU)';
     else if (shuffled.length === 6) roundName = 'VÒNG 6 ĐỘI (3 CẶP ĐỐI ĐẦU)';
@@ -368,13 +377,11 @@ bot.on('callback_query', async (callbackQuery) => {
     pairText += `━━━━━━━━━━━━━━━━━━━━━\n\n`;
 
     if (shuffled.length === 3) {
-      // Thiết kế riêng cho Vòng 3 Đội tranh giải (1 cặp đấu loại, 1 team đặc cách vào chung kết)
       pairText += `🔥 Trận Đối Đầu Loại Trực Tiếp:\n`;
       pairText += `👉 ${shuffled[0]}   🆚   ${shuffled[1]}\n\n`;
       pairText += `🎁 Đội Được Vé Đặc Cách (Bye):\n`;
       pairText += `👉 ${shuffled[2]} ⭐ (Vào thẳng Trận Chung Kết)\n`;
     } else {
-      // Chia cặp đối đầu chẵn thông thường (hoặc có lẻ slot nếu lẻ người)
       let pairIndex = 1;
       for (let i = 0; i < shuffled.length; i += 2) {
         if (i + 1 < shuffled.length) {
