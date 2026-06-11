@@ -60,12 +60,12 @@ async function updateSystemConfig(newConfig) {
 }
 
 // Hàm kiểm tra quyền sử dụng Bot (Chỉ cho phép Phát và các CTV đã đăng ký)
-async function isAuthorized(chatId) {
-  if (chatId === OWNER_ID) return true;
+async function isAuthorized(userId) {
+  if (userId === OWNER_ID || Number(userId) === OWNER_ID) return true;
   const config = await getSystemConfig();
   const ctvList = config.ctvList || [];
   // So khớp cả kiểu số và kiểu chữ để tránh lỗi ép kiểu dữ liệu
-  return ctvList.includes(chatId) || ctvList.includes(String(chatId));
+  return ctvList.includes(userId) || ctvList.includes(String(userId)) || ctvList.includes(Number(userId));
 }
 
 // Lấy dữ liệu lịch hôm nay từ Firestore
@@ -246,14 +246,15 @@ function getMainMenuKeyboard(config) {
 // 4. LẮNG NGHE TIN NHẮN TỪ NGƯỜI DÙNG
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
+  const userId = msg.from.id; // Lấy ID của người gửi tin nhắn thực tế
   const text = msg.text;
 
   if (!text) return;
 
-  // HỆ THỐNG KIỂM TRA PHÂN QUYỀN (CHỈ PHÁT & CTV MỚI ĐƯỢC CHAT VỚI BOT)
-  const isUserAuthorized = await isAuthorized(chatId);
+  // HỆ THỐNG KIỂM TRA PHÂN QUYỀN (CHỈ PHÁT & CTV MỚI ĐƯỢC PHÉP ĐIỀU KHIỂN)
+  const isUserAuthorized = await isAuthorized(userId);
   if (!isUserAuthorized) {
-    bot.sendMessage(chatId, `🚫 *CẢNH BÁO BẢO MẬT:* Bạn không có quyền truy cập hệ thống của *Phát Cày Thuê*. Vui lòng liên hệ Admin để được cấp quyền sử dụng bot!`, { parse_mode: 'Markdown' });
+    // Nếu trong nhóm có người khác chat tự do, bot sẽ phớt lờ hoàn toàn, tránh làm phiền nhóm
     return;
   }
 
@@ -261,9 +262,8 @@ bot.on('message', async (msg) => {
 
   // Khởi chạy hệ thống điều khiển
   if (text.startsWith('/start') || text.startsWith('/menu')) {
-    // Reset session nếu có
     delete sessions[chatId];
-    bot.sendMessage(chatId, `⚡ *BẢNG GIẢI KAISER - PHÁT CÀY THUÊ* ⚡\n\nChào Phát! Hệ thống xếp chồng tự động đã sẵn sàng. Bạn có thể chọn quản lý các ca đấu, cài đặt lệ phí hoặc gửi danh sách đăng ký thẳng vào đây để tự xếp chồng.`, {
+    bot.sendMessage(chatId, `⚡ *BẢNG GIẢI KAISER - PHÁT CÀY THUÊ* ⚡\n\nChào mừng bạn! Hệ thống xếp chồng tự động đã sẵn sàng. Bạn có thể chọn quản lý các ca đấu, cài đặt lệ phí hoặc gửi danh sách đăng ký thẳng vào nhóm để tự xếp chồng.`, {
       parse_mode: 'Markdown',
       ...getMainMenuKeyboard(config)
     });
@@ -289,7 +289,6 @@ bot.on('message', async (msg) => {
           dbData.schedules[time] = currentPlayers;
           await updateDailySchedule(dbData);
 
-          // Hỏi xem Phát muốn tiếp tục thêm người không
           const keyboard = {
             reply_markup: {
               inline_keyboard: [
@@ -323,7 +322,7 @@ bot.on('message', async (msg) => {
     if (session.step === 'setup_waiting_entry') {
       const fee = parseInt(text);
       if (isNaN(fee) || fee <= 0) {
-        bot.sendMessage(chatId, `❌ Số tiền không hợp lệ! Vui lòng nhập lại số nguyên (Ví dụ: 8):`);
+        bot.sendMessage(chatId, `❌ Số tiền không hợp lệ! Vui lòng nhập lại số nguyên:`);
         return;
       }
       config.entryFee = fee;
@@ -367,25 +366,25 @@ bot.on('message', async (msg) => {
       return;
     }
 
-    // Thiết lập cấu hình: Nhập Telegram ID CTV mới muốn thêm (Chỉ có Phát mới truy cập được step này)
+    // Thiết lập cấu hình: Nhập ID CTV
     if (session.step === 'setup_waiting_ctv_id') {
       const ctvId = text.trim();
       if (!/^\d+$/.test(ctvId)) {
-        bot.sendMessage(chatId, `❌ ID không hợp lệ! ID Telegram bắt buộc chỉ chứa ký tự số (Ví dụ: 8635662032). Vui lòng nhập lại:`);
+        bot.sendMessage(chatId, `❌ ID không hợp lệ! ID Telegram bắt buộc chỉ chứa ký tự số. Vui lòng nhập lại:`);
         return;
       }
 
       if (!config.ctvList) config.ctvList = [];
 
       if (!config.ctvList.includes(ctvId) && !config.ctvList.includes(Number(ctvId))) {
-        config.ctvList.push(ctvId);
+        config.ctvList.push(Number(ctvId));
         await updateSystemConfig(config);
-        bot.sendMessage(chatId, `✅ Đã thêm CTV mới có ID *${ctvId}* thành công!`, {
+        bot.sendMessage(chatId, `✅ Đã thêm CTV có ID *${ctvId}* thành công!`, {
           parse_mode: 'Markdown',
           reply_markup: { inline_keyboard: [[{ text: '👥 Quay Lại Quản Lý CTV', callback_data: 'setup_ctv' }]] }
         });
       } else {
-        bot.sendMessage(chatId, `⚠️ ID CTV này đã được đăng ký quyền sử dụng từ trước rồi!`, {
+        bot.sendMessage(chatId, `⚠️ ID CTV này đã tồn tại!`, {
           reply_markup: { inline_keyboard: [[{ text: '👥 Quay Lại Quản Lý CTV', callback_data: 'setup_ctv' }]] }
         });
       }
@@ -394,7 +393,7 @@ bot.on('message', async (msg) => {
     }
   }
 
-  // TÍNH NĂNG ĐĂNG KÝ NHANH CÚ PHÁP DẤU CỘNG (+) (VÍ DỤ: +1 nguyen phat 8h hoặc +nguyen phat 13h)
+  // TÍNH NĂNG ĐĂNG KÝ NHANH CÚ PHÁT DẤU CỘNG (+) (VÍ DỤ: +1 nguyen phat 8h)
   const plusCmd = parsePlusCommand(text);
   if (plusCmd) {
     const { name, time } = plusCmd;
@@ -410,27 +409,25 @@ bot.on('message', async (msg) => {
         dbData.schedules[time] = currentPlayers;
         await updateDailySchedule(dbData);
 
-        // Tạo bảng tin nhắn đã cập nhật mới nhất
         const updatedOutput = buildOutputText(dbData, config);
 
         await bot.deleteMessage(chatId, statusMsg.message_id);
-        await bot.sendMessage(chatId, `✅ *Đã tự động xếp "${name}" vào Slot ${nextEmptyIndex + 1} ca ${time} thành công!*`, { parse_mode: 'Markdown' });
+        await bot.sendMessage(chatId, `✅ *Đã xếp "${name}" vào Slot ${nextEmptyIndex + 1} ca ${time} thành công!*`, { parse_mode: 'Markdown' });
         
-        // Gửi trả bảng đấu Copy nhanh bằng HTML Code Block
         await bot.sendMessage(chatId, `<pre><code>${updatedOutput}</code></pre>`, {
           parse_mode: 'HTML',
           ...getMainMenuKeyboard(config)
         });
       } else {
         await bot.deleteMessage(chatId, statusMsg.message_id);
-        await bot.sendMessage(chatId, `⚠️ Ca đấu ${time} đã đầy 12/12 slot! Không thể thêm tiếp.`, getMainMenuKeyboard(config));
+        await bot.sendMessage(chatId, `⚠️ Ca đấu ${time} đã đầy!`, getMainMenuKeyboard(config));
       }
     } catch (err) {
       console.error(err);
       await bot.deleteMessage(chatId, statusMsg.message_id);
       await bot.sendMessage(chatId, `❌ Lỗi Firestore: ${err.message}`);
     }
-    return; // Dừng xử lý tiếp
+    return;
   }
 
   // TÍNH NĂNG XẾP CHỒNG TỰ ĐỘNG KHI DÁN TIN NHẮN (DÁN HÀNG LOẠT)
@@ -453,7 +450,7 @@ bot.on('message', async (msg) => {
 
     if (newNames.length === 0) {
       bot.deleteMessage(chatId, statusMsg.message_id);
-      bot.sendMessage(chatId, `❌ Không tìm thấy tên đăng ký hợp lệ từ dòng số 2 trở đi!`);
+      bot.sendMessage(chatId, `❌ Không tìm thấy tên đăng ký hợp lệ!`);
       return;
     }
 
@@ -479,13 +476,12 @@ bot.on('message', async (msg) => {
 
       const updatedOutput = buildOutputText(dbData, config);
 
-      let successMessage = `✅ *Đã tự động xếp chồng ${insertedCount} người vào các ô trống ca ${detectedTime}!*`;
+      let successMessage = `✅ *Đã xếp chồng ${insertedCount} người vào ca ${detectedTime}!*`;
       if (insertedCount < newNames.length) {
-        successMessage += `\n⚠️ _Ca đấu đã đầy! Còn dư ${newNames.length - insertedCount} người chưa thể xếp chỗ._`;
+        successMessage += `\n⚠️ _Ca đấu đã đầy! Dư ${newNames.length - insertedCount} người._`;
       }
       
       await bot.sendMessage(chatId, successMessage, { parse_mode: 'Markdown' });
-      
       await bot.sendMessage(chatId, `<pre><code>${updatedOutput}</code></pre>`, {
         parse_mode: 'HTML',
         ...getMainMenuKeyboard(config)
@@ -496,14 +492,17 @@ bot.on('message', async (msg) => {
       bot.deleteMessage(chatId, statusMsg.message_id);
       bot.sendMessage(chatId, `❌ Lỗi kết nối Firestore: ${error.message}`);
     }
-    return; // Dừng xử lý tiếp
+    return;
   }
 
-  // TỰ ĐỘNG GỬI MENU CHÍNH KHI PHÁT CHAT BẤT KỲ TIN NHẮN NÀO KHÔNG KHỚP CÚ PHÁP
-  bot.sendMessage(chatId, `ℹ️ *Cú pháp của Phát chưa khớp với đăng ký kaiser.* \n\nHệ thống tự động hiển thị Menu điều khiển để Phát dễ sử dụng:`, {
-    parse_mode: 'Markdown',
-    ...getMainMenuKeyboard(config)
-  });
+  // TỰ ĐỘNG HIỆN MENU - TRÁNH LÀM PHIỀN GROUP
+  // Chỉ tự động hiện Menu khi chat riêng (Private Chat). Trong Group chat, bot sẽ giữ im lặng nếu gõ sai cú pháp.
+  if (msg.chat.type === 'private') {
+    bot.sendMessage(chatId, `ℹ️ *Cú pháp của Phát chưa khớp.* \nHệ thống tự động hiển thị Menu để bạn thao tác:`, {
+      parse_mode: 'Markdown',
+      ...getMainMenuKeyboard(config)
+    });
+  }
 });
 
 // 5. XỬ LÝ SỰ KIỆN KHI NGƯỜI DÙNG CLICK NÚT BẤM (Callback)
@@ -511,14 +510,15 @@ bot.on('callback_query', async (callbackQuery) => {
   const action = callbackQuery.data;
   const msg = callbackQuery.message;
   const chatId = msg.chat.id;
+  const userId = callbackQuery.from.id; // Lấy ID người vừa click nút thực tế
   const messageId = msg.message_id;
 
   bot.answerCallbackQuery(callbackQuery.id);
 
-  // KIỂM TRA PHÂN QUYỀN NÚT BẤM CALLBACK (CHỈ PHÁT & CTV MỚI ĐƯỢC NHẤN NÚT TRÊN BOT)
-  const isUserAuthorized = await isAuthorized(chatId);
+  // KIỂM TRA PHÂN QUYỀN NÚT BẤM CALLBACK (CHỈ PHÁT & CTV MỚI ĐƯỢC NHẤN NÚT)
+  const isUserAuthorized = await isAuthorized(userId);
   if (!isUserAuthorized) {
-    bot.sendMessage(chatId, `🚫 Bạn không có quyền thực hiện hành động này!`);
+    bot.sendMessage(chatId, `🚫 Bạn không có quyền thao tác trên hệ thống này!`);
     return;
   }
 
@@ -532,7 +532,6 @@ bot.on('callback_query', async (callbackQuery) => {
 
     let responseText = `📅 *CHI TIẾT CA ĐẤU: ${time}* (${players.filter(p => p.trim() !== '').length}/12 Slot)\n\n`;
     
-    // Nút Đăng Ký Nhanh Liên Tục
     const inline_keyboard = [
       [
         { text: '📝 Đăng Ký Nhanh Liên Tục', callback_data: `flow_start_${time}` },
@@ -544,7 +543,6 @@ bot.on('callback_query', async (callbackQuery) => {
       const displayName = player.trim() ? player : '(Trống)';
       responseText += `${numberIcons[index]} ${player.trim() ? `*${player}* 🏆` : displayName}\n`;
       
-      // Cho phép sửa lẻ từng người
       if (index % 2 === 0) {
         const nextPlayer = players[index+1];
         const row = [
@@ -567,7 +565,7 @@ bot.on('callback_query', async (callbackQuery) => {
     });
   }
 
-  // Khởi động Trình Đăng Ký Nhanh Liên Tục (Có hỏi Tiếp tục / Không)
+  // Khởi động Trình Đăng Ký Nhanh Liên Tục
   if (action.startsWith('flow_start_')) {
     const time = action.split('_')[2];
     sessions[chatId] = {
@@ -621,8 +619,8 @@ bot.on('callback_query', async (callbackQuery) => {
       ]
     ];
 
-    // Chỉ có ADMIN tối cao (Phát) mới được nhìn thấy và sử dụng nút bấm Quản lý CTV
-    if (chatId === OWNER_ID) {
+    // Chỉ duy nhất bạn (Phát - OWNER_ID) mới thấy và nhấn được nút CTV
+    if (userId === OWNER_ID) {
       inline_keyboard.push([{ text: '👥 Quản Lý CTV (Admin)', callback_data: 'setup_ctv' }]);
     }
 
@@ -636,9 +634,9 @@ bot.on('callback_query', async (callbackQuery) => {
     });
   }
 
-  // TÍNH NĂNG MỚI: QUẢN LÝ CỘNG TÁC VIÊN (Chỉ cho phép OWNER_ID tức Phát)
+  // QUẢN LÝ CỘNG TÁC VIÊN (Chỉ dành cho Phát)
   if (action === 'setup_ctv') {
-    if (chatId !== OWNER_ID) {
+    if (userId !== OWNER_ID) {
       bot.sendMessage(chatId, `🚫 Bạn không có quyền truy cập khu vực quản trị CTV!`);
       return;
     }
@@ -674,14 +672,14 @@ bot.on('callback_query', async (callbackQuery) => {
 
   // Yêu cầu Phát nhập ID CTV mới
   if (action === 'ctv_add_prompt') {
-    if (chatId !== OWNER_ID) return;
+    if (userId !== OWNER_ID) return;
     sessions[chatId] = { step: 'setup_waiting_ctv_id' };
     bot.sendMessage(chatId, `✍️ Vui lòng dán/gửi *ID Telegram* của CTV bạn muốn phân quyền (Lấy từ @userinfobot hoặc @IdBot giống trong ảnh):`);
   }
 
   // Hiển thị danh sách CTV để bấm xóa quyền trực tiếp
   if (action === 'ctv_remove_list') {
-    if (chatId !== OWNER_ID) return;
+    if (userId !== OWNER_ID) return;
 
     const ctvList = config.ctvList || [];
     if (ctvList.length === 0) {
@@ -708,7 +706,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
   // Thực thi xóa CTV khỏi Firestore
   if (action.startsWith('ctv_do_remove_')) {
-    if (chatId !== OWNER_ID) return;
+    if (userId !== OWNER_ID) return;
     const targetId = action.replace('ctv_do_remove_', '');
 
     config.ctvList = (config.ctvList || []).filter(id => String(id) !== String(targetId));
@@ -716,7 +714,6 @@ bot.on('callback_query', async (callbackQuery) => {
 
     bot.sendMessage(chatId, `✅ Đã thu hồi quyền CTV thành công đối với ID *${targetId}*!`, { parse_mode: 'Markdown' });
     
-    // Refresh lại menu quản lý CTV
     const ctvList = config.ctvList;
     let text = `👥 *DANH SÁCH CỘNG TÁC VIÊN (CTV) ĐƯỢC PHÂN QUYỀN:*\n\n`;
     if (ctvList.length === 0) {
@@ -745,19 +742,19 @@ bot.on('callback_query', async (callbackQuery) => {
   // Yêu cầu nhập lệ phí mới
   if (action === 'setup_edit_entry') {
     sessions[chatId] = { step: 'setup_waiting_entry' };
-    bot.sendMessage(chatId, `✍️ Nhập *LỆ PHÍ PHÒNG* mới dạng số nguyên (Ví dụ: Bạn muốn phòng 8K thì gõ số *8*):`);
+    bot.sendMessage(chatId, `✍️ Nhập *LỆ PHÍ PHÒNG* mới dạng số nguyên:`);
   }
 
   // Yêu cầu nhập tiền lời
   if (action === 'setup_edit_profit') {
     sessions[chatId] = { step: 'setup_waiting_profit' };
-    bot.sendMessage(chatId, `✍️ Nhập *TIỀN LỜI PHẾ CỦA PHÁT* mới (Ví dụ: gõ số *1* để lấy lời 1K/Slot):`);
+    bot.sendMessage(chatId, `✍️ Nhập *TIỀN LỜI PHẾ CỦA PHÁT* mới:`);
   }
 
   // Yêu cầu nhập phí thế chân TP
   if (action === 'setup_edit_tp') {
     sessions[chatId] = { step: 'setup_waiting_tp' };
-    bot.sendMessage(chatId, `✍️ Nhập mức *THẾ CHÂN TP* mới dạng số (Ví dụ: *3* hoặc *5*):`);
+    bot.sendMessage(chatId, `✍️ Nhập mức *THẾ CHÂN TP* mới dạng số:`);
   }
 
   // Bật / tắt tính năng tự giảm giải
@@ -766,7 +763,6 @@ bot.on('callback_query', async (callbackQuery) => {
     await updateSystemConfig(config);
     showToast(bot, chatId, config.autoAdjustPrize ? "Đã bật tự động giảm giải thưởng" : "Đã tắt tự động giảm giải thưởng");
     
-    // Refresh lại menu chính
     bot.editMessageText(`⚡ *BẢNG GIẢI KAISER - PHÁT CÀY THUÊ* ⚡\n\nĐã cập nhật trạng thái tự giảm giải thưởng khi thiếu slot!`, {
       chat_id: chatId,
       message_id: messageId,
@@ -775,7 +771,7 @@ bot.on('callback_query', async (callbackQuery) => {
     });
   }
 
-  // Sửa / Xóa lẻ từng Slot cụ thể
+  // Sửa / Xóa lẻ từng Slot
   if (action.startsWith('edit_slot_')) {
     const parts = action.split('_');
     const time = parts[2];
@@ -785,7 +781,6 @@ bot.on('callback_query', async (callbackQuery) => {
     const oldName = dbData.schedules[time][index];
 
     if (oldName.trim()) {
-      // Slot đã có người -> Cho phép xóa hoặc đổi tên
       const keyboard = {
         reply_markup: {
           inline_keyboard: [
@@ -799,7 +794,6 @@ bot.on('callback_query', async (callbackQuery) => {
       };
       bot.sendMessage(chatId, `Slot ${index + 1} ca ${time} hiện tại là *${oldName}*. Bạn muốn làm gì?`, { parse_mode: 'Markdown', ...keyboard });
     } else {
-      // Slot trống -> Cho phép thêm nhanh trực tiếp
       bot.sendMessage(chatId, `✍️ Gửi tin nhắn chứa tên của người chơi cho Slot ${index + 1} ca ${time}:`);
       sessions[chatId] = { step: 'flow_waiting_name', time: time };
     }
@@ -844,7 +838,7 @@ bot.on('callback_query', async (callbackQuery) => {
         ]
       }
     };
-    bot.editMessageText(`⚠️ *Phát có chắc chắn muốn xóa sạch hoàn toàn tất cả người chơi ca ${time} không?* Hành động này không thể hoàn tác!`, {
+    bot.editMessageText(`⚠️ *Phát có chắc chắn muốn xóa sạch hoàn toàn tất cả người chơi ca ${time} không?*`, {
       chat_id: chatId,
       message_id: messageId,
       parse_mode: 'Markdown',
