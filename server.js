@@ -34,7 +34,8 @@ const DEFAULT_CONFIG = {
 };
 
 const numberIcons = ['0️⃣1️⃣', '0️⃣2️⃣', '0️⃣3️⃣', '0️⃣4️⃣', '0️⃣5️⃣', '0️⃣6️⃣', '0️⃣7️⃣', '0️⃣8️⃣', '0️⃣9️⃣', '1️⃣0️⃣', '1️⃣1️⃣', '1️⃣2️⃣'];
-const timeFrames = ['08H00', '10H00', '13H00', '15H00', '19H00'];
+// Đã cập nhật khung giờ mới: 10h, 12h, 15h, 17h, 19h
+const timeFrames = ['10H00', '12H00', '15H00', '17H00', '19H00'];
 
 async function getSystemConfig() {
   const docRef = db.collection('kaiser_config').doc('default');
@@ -79,6 +80,23 @@ async function getDailySchedule() {
     data.penaltyList = [];
     await docRef.update({ penaltyList: [] });
   }
+
+  // TỰ ĐỘNG BỔ SUNG: Đảm bảo các khung giờ mới luôn có cấu trúc dữ liệu trên Firestore
+  let updatedSchedules = false;
+  if (!data.schedules) {
+    data.schedules = {};
+    updatedSchedules = true;
+  }
+  timeFrames.forEach(time => {
+    if (!data.schedules[time]) {
+      data.schedules[time] = Array(12).fill('');
+      updatedSchedules = true;
+    }
+  });
+
+  if (updatedSchedules) {
+    await docRef.update({ schedules: data.schedules });
+  }
   
   return data;
 }
@@ -89,16 +107,18 @@ async function updateDailySchedule(data) {
   await docRef.update(data);
 }
 
+// Cập nhật bộ lọc tự động nhận diện các khung giờ mới thông minh
 function detectTimeFrame(text) {
   const normalized = text.toLowerCase().replace(/\s+/g, '');
-  if (normalized.includes('8h') || normalized.includes('08h') || normalized.includes('8hsang')) return '08H00';
   if (normalized.includes('10h') || normalized.includes('10h00')) return '10H00';
-  if (normalized.includes('1h') || normalized.includes('13h') || normalized.includes('1hchieu')) return '13H00';
-  if (normalized.includes('3h') || normalized.includes('15h') || normalized.includes('3hchieu')) return '15H00';
-  if (normalized.includes('7h') || normalized.includes('19h') || normalized.includes('7htoi')) return '19H00';
+  if (normalized.includes('12h') || normalized.includes('12h00') || normalized.includes('12htrua')) return '12H00';
+  if (normalized.includes('15h') || normalized.includes('15h00') || normalized.includes('3h') || normalized.includes('3hchieu')) return '15H00';
+  if (normalized.includes('17h') || normalized.includes('17h00') || normalized.includes('5h') || normalized.includes('5hchieu')) return '17H00';
+  if (normalized.includes('19h') || normalized.includes('19h00') || normalized.includes('7h') || normalized.includes('7htoi')) return '19H00';
   return null;
 }
 
+// Cú pháp dấu cộng đăng ký nhanh (+nguyen phat 12h)
 function parsePlusCommand(text) {
   let cleaned = text.trim();
   if (!cleaned.startsWith('+')) return null;
@@ -106,7 +126,7 @@ function parsePlusCommand(text) {
   body = body.replace(/^\d+\s*/, '').trim();
   const time = detectTimeFrame(body);
   if (!time) return null;
-  const timeRegex = /(08h00|08h|8h\s*sang|8h|10h00|10h|13h00|13h|1h\s*chieu|1h|15h00|15h|3h\s*chieu|3h|19h00|19h|7h\s*toi|7h)/i;
+  const timeRegex = /(10h00|10h|12h00|12h|12h\s*trua|15h00|15h|3h\s*chieu|3h|17h00|17h|5h\s*chieu|5h|19h00|19h|7h\s*toi|7h)/i;
   const name = body.replace(timeRegex, '').trim();
   if (!name) return null;
   return { name, time };
@@ -131,7 +151,8 @@ function buildOutputText(dbData, config) {
   let text = `SCRIM ${config.brandName.toUpperCase()} – CUSTOM ${config.brandName.toUpperCase()} ⚡\n`;
   text += `💎 ${config.slogan.toUpperCase()}\n\n━━━━━━━━━━━\n\n                  ${config.entryFee}K          \n           🥇 ${stdPrizes.prize1st}K 💸\n           🥈 ${stdPrizes.prize2nd}K 💸\n           🥉 ${stdPrizes.prize3rd}K 💸 \n\n━━━━━━━━━━━\n\n`;
   timeFrames.forEach(time => {
-    const players = dbData.schedules[time]; const filledCount = players.filter(p => p.trim() !== '').length;
+    const players = dbData.schedules[time] || Array(12).fill(''); 
+    const filledCount = players.filter(p => p.trim() !== '').length;
     let prizeNote = '';
     if (config.autoAdjustPrize && filledCount < 12) {
       const currentPrizes = calculatePrizes(filledCount, config);
@@ -160,8 +181,8 @@ function getMainMenuKeyboard(config) {
   return {
     reply_markup: {
       inline_keyboard: [
-        [{ text: '⏰ Ca 08H00', callback_data: 'view_08H00' }, { text: '⏰ Ca 10H00', callback_data: 'view_10H00' }],
-        [{ text: '⏰ Ca 13H00', callback_data: 'view_13H00' }, { text: '⏰ Ca 15H00', callback_data: 'view_15H00' }],
+        [{ text: '⏰ Ca 10H00', callback_data: 'view_10H00' }, { text: '⏰ Ca 12H00', callback_data: 'view_12H00' }],
+        [{ text: '⏰ Ca 15H00', callback_data: 'view_15H00' }, { text: '⏰ Ca 17H00', callback_data: 'view_17H00' }],
         [{ text: '⏰ Ca 19H00', callback_data: 'view_19H00' }],
         [{ text: `🔄 Tự giảm giải: ${autoStatus}`, callback_data: 'toggle_auto_prize' }],
         [{ text: '⚙️ Cấu Hình Lệ Phí / Thể Lệ', callback_data: 'setup_menu' }],
@@ -323,7 +344,7 @@ bot.on('callback_query', async (callbackQuery) => {
   const config = await getSystemConfig();
 
   if (action.startsWith('view_')) {
-    const time = action.split('_')[1]; const dbData = await getDailySchedule(); const players = dbData.schedules[time];
+    const time = action.split('_')[1]; const dbData = await getDailySchedule(); const players = dbData.schedules[time] || Array(12).fill('');
     let responseText = `📅 *CHI TIẾT CA ĐẤU: ${time}* (${players.filter(p => p.trim() !== '').length}/12 Slot)\n\n`;
     
     // Tích hợp nút Xếp Cặp Ngẫu Nhiên
@@ -340,7 +361,7 @@ bot.on('callback_query', async (callbackQuery) => {
     players.forEach((player, index) => {
       const displayName = player.trim() ? player : '(Trống)'; responseText += `${numberIcons[index]} ${player.trim() ? `*${player}* 🏆` : displayName}\n`;
       if (index % 2 === 0) {
-        const nextPlayer = players[index+1]; const row = [{ text: `${numberIcons[index]} ${player.trim() ? 'Sửa' : '➕'}`, callback_data: `edit_slot_${time}_${index}` }];
+        const nextPlayer = players[index+1] || ''; const row = [{ text: `${numberIcons[index]} ${player.trim() ? 'Sửa' : '➕'}`, callback_data: `edit_slot_${time}_${index}` }];
         if (index + 1 < 12) row.push({ text: `${numberIcons[index+1]} ${nextPlayer.trim() ? 'Sửa' : '➕'}`, callback_data: `edit_slot_${time}_${index+1}` });
         inline_keyboard.push(row);
       }
@@ -353,7 +374,7 @@ bot.on('callback_query', async (callbackQuery) => {
   if (action.startsWith('random_pair_')) {
     const time = action.split('_')[2];
     const dbData = await getDailySchedule();
-    const players = dbData.schedules[time].filter(p => p.trim() !== '');
+    const players = (dbData.schedules[time] || Array(12).fill('')).filter(p => p.trim() !== '');
 
     if (players.length < 2) {
       bot.sendMessage(chatId, `⚠️ Ca đấu ${time} hiện tại chỉ có ${players.length} người. Cần tối thiểu 2 người để xếp đối đầu!`);
@@ -474,7 +495,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
   if (action.startsWith('edit_slot_')) {
     const parts = action.split('_'); const time = parts[2]; const index = parseInt(parts[3]);
-    const dbData = await getDailySchedule(); const oldName = dbData.schedules[time][index];
+    const dbData = await getDailySchedule(); const oldName = (dbData.schedules[time] || Array(12).fill(''))[index] || '';
     if (oldName.trim()) {
       const keyboard = { inline_keyboard: [[{ text: '🗑️ Xóa Slot', callback_data: `do_delete_${time}_${index}` }, { text: '✏️ Đổi Tên', callback_data: `do_change_${time}_${index}` }], [{ text: '🔙 Quay Lại', callback_data: `view_${time}` }]] };
       bot.sendMessage(chatId, `Slot ${index + 1} ca ${time} hiện tại là *${oldName}*:`, { parse_mode: 'Markdown', reply_markup: keyboard });
@@ -485,7 +506,7 @@ bot.on('callback_query', async (callbackQuery) => {
 
   if (action.startsWith('do_delete_')) {
     const parts = action.split('_'); const time = parts[2]; const index = parseInt(parts[3]);
-    const dbData = await getDailySchedule(); dbData.schedules[time][index] = ''; await updateDailySchedule(dbData);
+    const dbData = await getDailySchedule(); if (dbData.schedules[time]) { dbData.schedules[time][index] = ''; await updateDailySchedule(dbData); }
     bot.sendMessage(chatId, `🗑️ Đã xóa slot ${index + 1} ca ${time}!`); bot.deleteMessage(chatId, messageId);
   }
 
