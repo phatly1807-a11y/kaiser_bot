@@ -1,17 +1,14 @@
 {
-  "name": "kaiser-telegram-bot",
-  "version": "1.2.0",
-  "description": "Bot Telegram quản lý giải Kaiser cho Phát Cày Thuê đồng bộ Firestore",
-  "main": "server.js",
+  "name": "bot-tele-team",
+  "version": "1.0.0",
+  "main": "index.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
   },
   "dependencies": {
-    "node-telegram-bot-api": "^0.66.0",
-    "firebase-admin": "^12.0.0",
-    "express": "^4.19.2"
-  },
-  "engines": {
-    "node": ">=18.0.0"
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.1.0",
+    "telegraf": "^4.16.3"
   }
 }
